@@ -3,13 +3,13 @@
 void* test(void *arg){
     std::unique_ptr<SafeIOFile> file(make_SafeIOFile("/dev/shm/test",O_RDWR | O_CREAT,0666));
     file->Write((void *) "test", 4);
-    std::cout << "succeed for test " << std::endl;
+//    std::cout << "succeed for test " << std::endl;
     return 0;
 }
 void* test1(void *arg){
     std::unique_ptr<SafeIOFile> file(make_SafeIOFile("/dev/shm/test",O_RDWR | O_CREAT,0666));
     file->Write((void *) "test", 4,4);
-    std::cout << "test1 running normal" << std::endl;
+//    std::cout << "test1 running normal" << std::endl;
     return 0;
 }
 pthread_t thread1,thread2;

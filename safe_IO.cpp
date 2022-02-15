@@ -9,21 +9,14 @@
 #include <cassert>
 #include "safe_IO.h"
 
-static std::list<unixInodeInfo *> inodeList;
-static pthread_mutex_t listMutex;
-static long listInit = 0;
-struct unixInodeInfo;
-struct unixFileId {
-    dev_t dev;
-    unsigned long ino;
-};
+
 class unixFile :public SafeIOFile{
 private:
     std::string filePath;
     int fd;
     int flag;
     long lockType = NO_LOCK;
-    std::shared_ptr<unixInodeInfo> pUnixInode;
+    unixInodeInfo* pUnixInode;
 public:
     constexpr static long NO_LOCK = 0;
     constexpr static long SHARED_LOCK = 1;
@@ -31,9 +24,7 @@ public:
     constexpr static long EXECUTE_LOCK = 3;
 
     unixFile(std::string filePath,int flag,int authority = 0666);
-    ~unixFile(){
-        close(fd);
-    }
+    ~unixFile();
 
     std::string FilePath(){return filePath;}
     int Read(void *buffer,ssize_t size,off_t offset){
@@ -48,12 +39,20 @@ public:
     int Write(void *buffer,ssize_t size);
 };
 
+
+
+struct unixFileId {
+    dev_t dev = 0;
+    ino_t ino = 0;
+};
+
 struct unixInodeInfo {
 
 public:
     unixFileId fileId;
-    pthread_mutex_t mutex;
+    pthread_mutex_t mutex{};
     long nShared = 0;
+    long nRef = 0;
     long lockType = unixFile::NO_LOCK;
 
     constexpr static long SHARED_BYTE = 0x10000;
@@ -61,58 +60,92 @@ public:
     constexpr static long EXECUTE_BYTE = 0x10002;
 
 
-    unixInodeInfo(dev_t dev, unsigned long ino) {
-        fileId.dev = dev;
-        fileId.ino = ino;
-        pthread_mutex_init(&mutex, nullptr);
-        if(listInit == 0){
-            listInit = 1;
-            pthread_mutex_init(&listMutex,nullptr);
-        }
+    unixInodeInfo(dev_t dev,ino_t ino){
+        this->fileId.dev = dev;
+        this-> fileId.ino = ino;
+        pthread_mutex_init(&mutex,nullptr);
     }
+    ~unixInodeInfo();
+    static unixInodeInfo *Find(dev_t dev,ino_t ino);
+    static void Unregister(unixInodeInfo *unregister_info);
 
-    ~unixInodeInfo() {
-        pthread_mutex_destroy(&mutex);
+};
 
+struct inodeManage{
+    std::list<unixInodeInfo *> inodeList;
+    pthread_mutex_t listMutex{};
+    inodeManage(){ pthread_mutex_init(&listMutex,nullptr);}
+    unixInodeInfo* Find(dev_t dev,ino_t ino){
         pthread_mutex_lock(&listMutex);
-        for (auto it = inodeList.begin(); it != inodeList.end(); ++it) {
-            if (*it == this) {
-                inodeList.erase(it);
-                break;
-            }
-        }
-        pthread_mutex_unlock(&listMutex);
-    }
-
-    static unixInodeInfo *Find(dev_t dev, unsigned long ino) {
-        pthread_mutex_lock(&listMutex);
-        for (auto it = inodeList.begin(); it != inodeList.end(); it++) {
-            if ((*it)->fileId.dev == dev &&
-                (*it)->fileId.ino == ino) {
-                pthread_mutex_unlock(&listMutex);
+        for(auto it = inodeList.begin(); it != inodeList.end(); ++it){
+            if((*it)->fileId.dev == dev && (*it)->fileId.ino == ino) {
+                pthread_mutex_unlock(& listMutex);
                 return *it;
             }
         }
         pthread_mutex_unlock(&listMutex);
-        auto newInode = new unixInodeInfo(dev, ino);
-
-        pthread_mutex_lock(&listMutex);
-        inodeList.push_back(newInode);
-        pthread_mutex_unlock(&listMutex);
-        return newInode;
+        return  nullptr;
     }
-};
+    int Erase(dev_t dev,ino_t ino){
+        pthread_mutex_lock(&listMutex);
+        for(auto it = inodeList.begin(); it != inodeList.end(); ++it){
+            if((*it)->fileId.dev == dev && (*it)->fileId.ino == ino) {
+                inodeList.erase(it);
+                pthread_mutex_unlock(& listMutex);
+                return 1;
+            }
+        }
+        pthread_mutex_unlock(&listMutex);
+        return  0;
+    }
+    int Add(unixInodeInfo *info){
+        for (auto & it : inodeList) {
+            if(it == info)
+                return -1;
+        }
+        inodeList.push_back(info);
+        return 0;
+    }
+}static inodeList;
 
 
+unixInodeInfo::~unixInodeInfo(){
+    pthread_mutex_destroy(&mutex);
+    inodeList.Erase(fileId.dev,fileId.ino);
+}
+
+unixInodeInfo *unixInodeInfo::Find(dev_t dev,ino_t ino){
+    unixInodeInfo *info = inodeList.Find(dev,ino);
+    if(info == nullptr){
+        info = new unixInodeInfo(dev,ino);
+        inodeList.Add(info);
+    }
+    pthread_mutex_lock(&info->mutex);
+    info->nRef++;
+    pthread_mutex_unlock(&info -> mutex);
+    return info;
+}
+
+void unixInodeInfo::Unregister(unixInodeInfo *unregister_info){
+    pthread_mutex_lock(&unregister_info->mutex);
+    unregister_info ->nRef--;
+    pthread_mutex_unlock(&unregister_info -> mutex);
+    if(unregister_info -> nRef == 0)
+        delete unregister_info;
+}
 unixFile::unixFile(std::string filePath,int flag,int authority){
     fd = open(filePath.c_str(), flag, authority);
     if (fd <= 0)
         throw std::invalid_argument(filePath);
     struct stat st{};
     stat(filePath.c_str(), &st);
-    pUnixInode.reset(unixInodeInfo::Find(st.st_dev, st.st_ino));
+    pUnixInode = unixInodeInfo::Find(st.st_dev, st.st_ino);
     this->filePath = std::move(filePath);
     this->flag = flag;
+}
+unixFile::~unixFile() {
+    close(fd);
+    unixInodeInfo::Unregister(pUnixInode);
 }
 
 int unixFile::Read(void *buffer, ssize_t size) {

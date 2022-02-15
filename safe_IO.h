@@ -22,11 +22,11 @@ class SafeIOFile{
 public:
     SafeIOFile() = default;
     virtual ~SafeIOFile() = default;
-    virtual std::string FilePath(){throw std::bad_exception();}
-    virtual int Read(void *buffer,ssize_t size,off_t offset){throw std::bad_exception();}
-    virtual int Read(void *buffer,ssize_t size) {throw std::bad_exception();}
-    virtual int Write(void *buffer,ssize_t size,off_t offset){throw std::bad_exception();}
-    virtual int Write(void *buffer,ssize_t size){throw std::bad_exception();}
+    virtual std::string FilePath() = 0;
+    virtual int Read(void *buffer,ssize_t size,off_t offset) = 0;
+    virtual int Read(void *buffer,ssize_t size) = 0;
+    virtual int Write(void *buffer,ssize_t size,off_t offset) = 0;
+    virtual int Write(void *buffer,ssize_t size) = 0;
 };
 
 SafeIOFile *make_SafeIOFile(std::string file_path,int flag,int authority = 0666);
