@@ -3,15 +3,49 @@
 //
 
 #include <list>
+#include <utility>
 #include <sys/file.h>
+#include <iostream>
+#include <cassert>
 #include "safe_IO.h"
 
 static std::list<unixInodeInfo *> inodeList;
 static pthread_mutex_t listMutex;
 static long listInit = 0;
+struct unixInodeInfo;
 struct unixFileId {
     dev_t dev;
     unsigned long ino;
+};
+class unixFile :public SafeIOFile{
+private:
+    std::string filePath;
+    int fd;
+    int flag;
+    long lockType = NO_LOCK;
+    std::shared_ptr<unixInodeInfo> pUnixInode;
+public:
+    constexpr static long NO_LOCK = 0;
+    constexpr static long SHARED_LOCK = 1;
+    constexpr static long RESERVED_LOCK = 2;
+    constexpr static long EXECUTE_LOCK = 3;
+
+    unixFile(std::string filePath,int flag,int authority = 0666);
+    ~unixFile(){
+        close(fd);
+    }
+
+    std::string FilePath(){return filePath;}
+    int Read(void *buffer,ssize_t size,off_t offset){
+        lseek(fd,offset,SEEK_SET);
+        return Read(buffer,size);
+    }
+    int Read(void *buffer,ssize_t size);
+    int Write(void *buffer,ssize_t size,off_t offset){
+        lseek(fd,offset,SEEK_SET);
+        return Write(buffer,size);
+    }
+    int Write(void *buffer,ssize_t size);
 };
 
 struct unixInodeInfo {
@@ -69,19 +103,9 @@ public:
     }
 };
 
-unixFile::unixFile(std::string filePath, int flag, int authority) {
-    fd = open(filePath.c_str(), flag, authority);
-    if (fd <= 0)
-        throw std::invalid_argument(filePath);
-    struct stat st{};
-    stat(filePath.c_str(), &st);
-    pUnixInode.reset(unixInodeInfo::Find(st.st_dev, st.st_ino));
-    this->filePath = std::move(filePath);
-    this->flag = flag;
-}
 
-unixFile::unixFile(std::string filePath, int flag) {
-    fd = open(filePath.c_str(), flag);
+unixFile::unixFile(std::string filePath,int flag,int authority){
+    fd = open(filePath.c_str(), flag, authority);
     if (fd <= 0)
         throw std::invalid_argument(filePath);
     struct stat st{};
@@ -149,6 +173,10 @@ int unixFile::Write(void *buffer, ssize_t size) {
 }
 
 
+SafeIOFile *make_SafeIOFile(std::string file_path,int flag,int authority){
+    auto*file = new unixFile(std::move(file_path), flag,authority);
+    return file;
+}
 
 
 
